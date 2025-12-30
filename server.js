@@ -1,5 +1,5 @@
 // ===============================================================================
-// APEX SUMMIT PINNACLE v56.0 (SHIELDED CLUSTER) - HIGH-FREQUENCY ENGINE
+// APEX SUMMIT PINNACLE v57.0 (TRUE SHARDED CLUSTER) - HIGH-FREQUENCY ENGINE
 // ===============================================================================
 
 const cluster = require('cluster');
@@ -35,21 +35,20 @@ const GLOBAL_CONFIG = {
     BENEFICIARY: "0x4B8251e7c80F910305bb81547e301DcB8A596918",
     TARGET_CONTRACT: "0x83EF5c401fAa5B9674BAfAcFb089b30bAc67C9A0",
     
-    // 🚦 TRAFFIC CONTROL (v56.0 SHIELDED)
-    MEMPOOL_SAMPLE_RATE: 0.008,          // 0.8% per core (Safety first for 48-core system)
-    WORKER_BOOT_DELAY_MS: 40000,         // 40s Master Stagger (Essential for Railway/Infura stability)
-    HEARTBEAT_INTERVAL_MS: 90000,        // Update fees every 90s to keep RPC load near zero
+    // 🚦 TRAFFIC CONTROL (v57.0 TRUE SHARDED)
+    MEMPOOL_SAMPLE_RATE: 0.012,          // 1.2% per core (Balanced for sharding)
+    WORKER_BOOT_DELAY_MS: 30000,         // 30s Master Queue (Critical for 48-core handshake)
+    HEARTBEAT_INTERVAL_MS: 120000,       // 2m Heartbeat (Ultra-low RPC weight)
     RPC_COOLDOWN_MS: 30000,              
-    RATE_LIMIT_SLEEP_MS: 450000,         // 7.5m Deep Sleep if 429 persists
+    RATE_LIMIT_SLEEP_MS: 300000,         // 5m Deep Sleep on 429
     
-    // 🐋 SUMMIT SETTINGS (v34.0 Strategy)
+    // 🐋 SUMMIT SETTINGS
     SUMMIT_THRESHOLD: parseEther("15.0"), 
-    MIN_LOG_ETH: parseEther("10.0"),
+    LEVIATHAN_MIN_ETH: parseEther("10.0"),
     GAS_LIMIT: 1100000n,
     MARGIN_ETH: "0.015",
     PRIORITY_BRIBE: 15n,
     QUANTUM_BRIBE_MAX: 99.5,
-    CROSS_CHAIN_PROBE: true,
 
     NETWORKS: [
         {
@@ -91,12 +90,12 @@ if (cluster.isPrimary) {
     console.clear();
     console.log(`${TXT.bold}${TXT.gold}
 ╔════════════════════════════════════════════════════════╗
-║   ⚡ APEX TITAN v56.0 | SHIELDED OVERLORD MASTER     ║
-║   STRATEGY: SUMMIT PINNACLE + PROBE BYPASS ACTIVE    ║
+║   ⚡ APEX TITAN v57.0 | TRUE SHARDED OVERLORD       ║
+║   STRATEGY: SUBSCRIPTION SHARDING + LINEAR STAGGER   ║
 ╚════════════════════════════════════════════════════════╝${TXT.reset}`);
 
     const cpuCount = Math.min(os.cpus().length, 48); 
-    console.log(`${TXT.cyan}[SYSTEM] Launching 48-Core Fleet with 40s Safe-Stagger...${TXT.reset}`);
+    console.log(`${TXT.cyan}[SYSTEM] Linear Queue Boot for ${cpuCount} Cores (30s stagger)...${TXT.reset}`);
 
     const spawnWorker = (i) => {
         if (i >= cpuCount) return;
@@ -107,8 +106,8 @@ if (cluster.isPrimary) {
     spawnWorker(0);
 
     cluster.on('exit', (worker) => {
-        console.log(`${TXT.red}⚠️ Core Failed. Resting 120s before core reboot...${TXT.reset}`);
-        setTimeout(() => cluster.fork(), 120000);
+        console.log(`${TXT.red}⚠️ Core Sleep-Cycling. Cooling down 180s...${TXT.reset}`);
+        setTimeout(() => cluster.fork(), 180000);
     });
 } 
 // --- WORKER PROCESS ---
@@ -116,15 +115,17 @@ else {
     const networkIndex = (cluster.worker.id - 1) % GLOBAL_CONFIG.NETWORKS.length;
     const NETWORK = GLOBAL_CONFIG.NETWORKS[networkIndex];
     
-    // Tier 2 Stagger: spread handshake over long window
-    const activationJitter = (cluster.worker.id % 48) * 2000;
+    // v57.0 Linear Worker Delay: worker 48 waits ~90s after its own boot
+    const startDelay = (cluster.worker.id % 24) * 5000;
     setTimeout(() => {
         initWorker(NETWORK).catch(() => {});
-    }, activationJitter);
+    }, startDelay);
 }
 
 async function initWorker(CHAIN) {
     const TAG = `${CHAIN.color}[${CHAIN.name}]${TXT.reset}`;
+    const IS_MEMPOOL_DIVISION = (cluster.worker.id % 2 !== 0); // Sharding: Odd = Mempool, Even = Logs
+    
     let isProcessing = false;
     let cachedFeeData = null;
     let currentEthPrice = 0;
@@ -135,15 +136,13 @@ async function initWorker(CHAIN) {
     const walletKey = rawKey.trim();
 
     async function safeConnect() {
-        if (retryCount >= 80) return;
+        if (retryCount >= 100) return;
 
         try {
-            // v56.0 FIX: Hardcode Network object to BYPASS ALL RPC NETWORK PROBES
             const netObj = ethers.Network.from(CHAIN.chainId);
             const provider = new JsonRpcProvider(CHAIN.rpc, netObj, { staticNetwork: true, batchMaxCount: 1 });
             const wsProvider = new WebSocketProvider(CHAIN.wss, netObj);
             
-            // Catch Handshake Errors
             wsProvider.on('error', (e) => {
                 if (e.message.includes("429") || e.message.includes("coalesce") || e.message.includes("infura")) {
                    process.stdout.write(`${TXT.red}!${TXT.reset}`);
@@ -159,7 +158,7 @@ async function initWorker(CHAIN) {
             const gasOracle = CHAIN.gasOracle ? new Contract(CHAIN.gasOracle, ["function getL1Fee(bytes memory _data) public view returns (uint256)"], provider) : null;
             const poolContract = CHAIN.chainId === 8453 ? new Contract(GLOBAL_CONFIG.WETH_USDC_POOL, ["function getReserves() external view returns (uint112, uint112, uint32)"], provider) : null;
 
-            // Load-Balanced Heartbeat (Minimal RPC weight)
+            // Heartbeat Logic (Every 2 mins - Ultra stable)
             setInterval(async () => {
                 if (isProcessing) return;
                 try {
@@ -170,61 +169,62 @@ async function initWorker(CHAIN) {
                     if (fees) cachedFeeData = fees;
                     if (price) currentEthPrice = Number(price) / 1e8;
                 } catch (e) {}
-            }, GLOBAL_CONFIG.HEARTBEAT_INTERVAL_MS + (Math.random() * 20000));
+            }, GLOBAL_CONFIG.HEARTBEAT_INTERVAL_MS + (Math.random() * 30000));
 
-            console.log(`${TXT.green}✅ CORE ${cluster.worker.id} QUANTUM ACTIVE on ${TAG}${TXT.reset}`);
+            const ROLE = IS_MEMPOOL_DIVISION ? "SNIPER" : "DECODER";
+            console.log(`${TXT.green}✅ CORE ${cluster.worker.id} ACTIVE (${ROLE}) on ${TAG}${TXT.reset}`);
 
             const titanIface = new Interface([
                 "function requestTitanLoan(address _token, uint256 _amount, address[] calldata _path)",
                 "function executeTriangle(address[] path, uint256 amount)"
             ]);
 
-            // v56.0 FIX: Tier 3 Delay (60s) before initiating subscriptions to prevent 429
+            // v57.0 SHARDING LOGIC
             setTimeout(() => {
-                // MEMPOOL SNIPER
-                wsProvider.on("pending", async (txHash) => {
-                    if (isProcessing) return;
-                    if (Math.random() > GLOBAL_CONFIG.MEMPOOL_SAMPLE_RATE) return; 
+                if (IS_MEMPOOL_DIVISION) {
+                    // DIVISION A: MEMPOOL SNIPING
+                    wsProvider.on("pending", async (txHash) => {
+                        if (isProcessing) return;
+                        if (Math.random() > GLOBAL_CONFIG.MEMPOOL_SAMPLE_RATE) return; 
 
-                    try {
-                        scanCount++;
-                        if (scanCount % 500 === 0 && (cluster.worker.id % 12 === 0)) {
-                           process.stdout.write(`\r${TAG} ${TXT.dim}Latency: 0.1ms | Txs: ${scanCount} | Mode: Overseer Active${TXT.reset}`);
-                        }
-
-                        isProcessing = true;
-                        const tx = await provider.getTransaction(txHash).catch(() => null);
-                        
-                        if (tx && tx.to && tx.value >= GLOBAL_CONFIG.SUMMIT_THRESHOLD) {
-                            const isDEXTrade = (tx.to.toLowerCase() === CHAIN.uniswapRouter.toLowerCase());
-                            if (isDEXTrade) {
-                                console.log(`\n${TAG} ${TXT.gold}⚡ SUMMIT DETECTED: ${formatEther(tx.value)} ETH whale transaction!${TXT.reset}`);
-                                await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, "SUMMIT_OMNI", cachedFeeData);
+                        try {
+                            scanCount++;
+                            if (scanCount % 500 === 0 && (cluster.worker.id % 12 === 0)) {
+                               process.stdout.write(`\r${TAG} ${TXT.dim}Division A | Flowing... Txs: ${scanCount}${TXT.reset}`);
                             }
-                        } else if (Math.random() > 0.9999 && GLOBAL_CONFIG.CROSS_CHAIN_PROBE) {
-                            await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, "CROSS_CHAIN", cachedFeeData);
-                        }
-                        setTimeout(() => { isProcessing = false; }, GLOBAL_CONFIG.RPC_COOLDOWN_MS);
-                    } catch (err) { isProcessing = false; }
-                });
 
-                // LOG SNIPER
-                const swapTopic = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
-                wsProvider.on({ topics: [swapTopic] }, async (log) => {
-                    if (isProcessing) return;
-                    try {
-                        const decoded = AbiCoder.defaultAbiCoder().decode(["uint256", "uint256", "uint256", "uint256"], log.data);
-                        const maxSwap = decoded.reduce((max, val) => val > max ? val : max, 0n);
+                            isProcessing = true;
+                            const tx = await provider.getTransaction(txHash).catch(() => null);
+                            
+                            if (tx && tx.to && tx.value >= GLOBAL_CONFIG.SUMMIT_THRESHOLD) {
+                                const isDEXTrade = (tx.to.toLowerCase() === CHAIN.uniswapRouter.toLowerCase());
+                                if (isDEXTrade) {
+                                    console.log(`\n${TAG} ${TXT.gold}⚡ DIVISION A INTERCEPT: ${formatEther(tx.value)} ETH whale!${TXT.reset}`);
+                                    await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, "SUMMIT_OMNI", cachedFeeData);
+                                }
+                            }
+                            setTimeout(() => { isProcessing = false; }, GLOBAL_CONFIG.RPC_COOLDOWN_MS);
+                        } catch (err) { isProcessing = false; }
+                    });
+                } else {
+                    // DIVISION B: BLOCK LOG DECODING (LEVIATHAN)
+                    const swapTopic = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
+                    wsProvider.on({ topics: [swapTopic] }, async (log) => {
+                        if (isProcessing) return;
+                        try {
+                            const decoded = AbiCoder.defaultAbiCoder().decode(["uint256", "uint256", "uint256", "uint256"], log.data);
+                            const maxSwap = decoded.reduce((max, val) => val > max ? val : max, 0n);
 
-                        if (maxSwap >= GLOBAL_CONFIG.MIN_LOG_ETH) {
-                             isProcessing = true;
-                             console.log(`\n${TAG} ${TXT.yellow}🐳 CONFIRMED LOG: ${formatEther(maxSwap)} ETH confirmed in block.${TXT.reset}`);
-                             await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, "LEVIATHAN", cachedFeeData);
-                             setTimeout(() => { isProcessing = false; }, GLOBAL_CONFIG.RPC_COOLDOWN_MS);
-                        }
-                    } catch (e) { isProcessing = false; }
-                });
-            }, 60000);
+                            if (maxSwap >= GLOBAL_CONFIG.LEVIATHAN_MIN_ETH) {
+                                 isProcessing = true;
+                                 console.log(`\n${TAG} ${TXT.yellow}🐳 DIVISION B CONFIRM: ${formatEther(maxSwap)} ETH swap log!${TXT.reset}`);
+                                 await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, "LEVIATHAN", cachedFeeData);
+                                 setTimeout(() => { isProcessing = false; }, GLOBAL_CONFIG.RPC_COOLDOWN_MS);
+                            }
+                        } catch (e) { isProcessing = false; }
+                    });
+                }
+            }, 60000); // Wait 60s after connection before subscribing
 
         } catch (e) {
             retryCount++;
@@ -244,7 +244,6 @@ async function attemptStrike(provider, wallet, iface, gasOracle, pool, ethPrice,
         const usdWealth = balanceEth * ethPrice;
         let loanAmount;
 
-        // DYNAMIC SCALING (Wealth Tiers + Pool Reserve Check)
         if (usdWealth >= 200) loanAmount = parseEther("100");
         else if (usdWealth >= 100) loanAmount = parseEther("75");
         else if (usdWealth >= 50)  loanAmount = parseEther("50");
@@ -287,10 +286,7 @@ async function executeStrikeInternal(provider, wallet, strikeData, loanAmount, g
             const netProfit = rawProfit - totalThreshold;
             console.log(`\n${TXT.green}${TXT.bold}✅ BLOCK DOMINATED! +${formatEther(netProfit)} ETH (~$${(parseFloat(formatEther(netProfit)) * ethPrice).toFixed(2)})${TXT.reset}`);
 
-            let bribePercent = GLOBAL_CONFIG.PRIORITY_BRIBE;
-            if (mode === "CROSS_CHAIN") bribePercent = BigInt(Math.floor(GLOBAL_CONFIG.QUANTUM_BRIBE_MAX));
-            
-            const aggressivePriority = (currentFees.maxPriorityFeePerGas * (100n + bribePercent)) / 100n;
+            let aggressivePriority = (currentFees.maxPriorityFeePerGas * 150n) / 100n;
 
             const txPayload = {
                 to: GLOBAL_CONFIG.TARGET_CONTRACT,
